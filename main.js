@@ -112,6 +112,44 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// Auto-update (Windows installed builds only). Checks the GitHub Release for a
+// newer version, asks the user before downloading and again before installing.
+// Skipped in dev and on macOS (the Mac build is unpackaged + unsigned).
+function setupAutoUpdate() {
+  if (!app.isPackaged || process.platform !== 'win32') return;
+  let autoUpdater;
+  try { ({ autoUpdater } = require('electron-updater')); } catch { return; }
+  autoUpdater.autoDownload = false;            // ask before downloading
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  autoUpdater.on('update-available', (info) => {
+    dialog.showMessageBox(win, {
+      type: 'info', noLink: true, buttons: ['Descargar ahora', 'Más tarde'], defaultId: 0, cancelId: 1,
+      title: 'Actualización disponible',
+      message: `Hay una nueva versión disponible (${info.version}).`,
+      detail: 'Puede descargarla ahora. Se instalará cuando reinicie la aplicación.',
+    }).then((r) => { if (r.response === 0) autoUpdater.downloadUpdate().catch(() => {}); });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    dialog.showMessageBox(win, {
+      type: 'info', noLink: true, buttons: ['Reiniciar e instalar', 'Al cerrar'], defaultId: 0, cancelId: 1,
+      title: 'Actualización lista',
+      message: `La versión ${info.version} está lista.`,
+      detail: 'La aplicación se reiniciará para terminar de instalarla.',
+    }).then((r) => {
+      if (r.response === 0) { quitting = true; autoUpdater.quitAndInstall(); }
+      else { autoUpdater.autoInstallOnAppQuit = true; } // otherwise install on next close
+    });
+  });
+
+  autoUpdater.on('error', (err) => { console.error('auto-update error:', err); });
+
+  autoUpdater.checkForUpdates().catch(() => {});
+  // Re-check every 6 hours for machines left running for days.
+  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
+}
+
 // Single-instance: focus the existing window instead of opening a second copy.
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -126,6 +164,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     buildMenu();
     createWindow();
+    setupAutoUpdate();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   });
 

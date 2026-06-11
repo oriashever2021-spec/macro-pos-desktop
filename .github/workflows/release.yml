@@ -41,5 +41,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.exe
+          # .exe = installer; latest.yml + .blockmap = auto-update metadata
+          files: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
           generate_release_notes: true
