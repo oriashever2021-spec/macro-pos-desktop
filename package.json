@@ -1,0 +1,59 @@
+{
+  "name": "macro-pos-desktop",
+  "version": "1.0.0",
+  "description": "Macrobiótica Eccos POS — desktop wrapper (loads myposcr.web.app)",
+  "main": "main.js",
+  "author": "Macrobiótica Eccos",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "@electron/fuses": "^1.8.0",
+    "@electron/osx-sign": "^2.4.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "cr.eccos.pos",
+    "productName": "Macrobiótica Eccos POS",
+    "afterPack": "./afterPack.js",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "package.json",
+      "build/icon.png"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.business",
+      "icon": "build/icon.png"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Macrobiótica Eccos POS",
+      "artifactName": "MacrobioticaEccosPOS-Setup-${version}.${ext}"
+    }
+  }
+}
