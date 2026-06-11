@@ -1,6 +1,6 @@
 {
   "name": "macro-pos-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Macrobiótica Eccos POS — desktop wrapper (loads myposcr.web.app)",
   "main": "main.js",
   "author": "Macrobiótica Eccos",
