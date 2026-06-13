@@ -1,5 +1,7 @@
-const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 const APP_URL = 'https://myposcr.web.app';
 // Hosts the app is allowed to navigate to in-window (the app + Firebase auth/hosting).
@@ -56,6 +58,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 
@@ -85,6 +88,58 @@ function createWindow() {
     if (askToClose()) { quitting = true; win.close(); }
   });
 }
+
+// Receipt printing with a real preview. The web app hands us the receipt HTML;
+// we render it to a PDF off-screen and open that PDF in a viewer window
+// (Chromium's built-in PDF viewer = visible preview + print + save), which the
+// plain Electron print dialog does not offer. Returns true on success so the
+// web app can fall back to its own in-app print path if anything here fails.
+ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
+  const html = payload && payload.html;
+  const title = (payload && payload.title) || 'Factura';
+  if (!html) return false;
+
+  let renderWin = null;
+  try {
+    // Off-screen window just to lay out the receipt and export a PDF.
+    renderWin = new BrowserWindow({
+      show: false,
+      webPreferences: { contextIsolation: true, nodeIntegration: false },
+    });
+    await renderWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+
+    const pdf = await renderWin.webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: true, // honor the receipt's @page { size: 80mm auto }
+    });
+
+    renderWin.destroy();
+    renderWin = null;
+
+    const file = path.join(os.tmpdir(), `factura-${Date.now()}.pdf`);
+    fs.writeFileSync(file, pdf);
+
+    // Visible preview window. plugins:true enables the built-in PDF viewer,
+    // which has its own print + download controls.
+    const viewer = new BrowserWindow({
+      width: 460,
+      height: 760,
+      title,
+      parent: win || undefined,
+      autoHideMenuBar: true,
+      backgroundColor: '#525659',
+      webPreferences: { plugins: true },
+    });
+    viewer.setMenuBarVisibility(false);
+    await viewer.loadFile(file);
+    viewer.on('closed', () => { try { fs.unlinkSync(file); } catch {} });
+    return true;
+  } catch (err) {
+    console.error('eccos-print-receipt failed:', err);
+    try { if (renderWin) renderWin.destroy(); } catch {}
+    return false;
+  }
+});
 
 // Minimal Spanish menu — keeps reload/fullscreen reachable without exposing the full default menu.
 function buildMenu() {
