@@ -116,7 +116,11 @@ ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
     renderWin.destroy();
     renderWin = null;
 
-    const file = path.join(os.tmpdir(), `factura-${Date.now()}.pdf`);
+    // Name the temp file from the receipt title so the PDF viewer's Download
+    // defaults to a meaningful name (e.g. "Factura 36299 - 13 jun 2026.pdf")
+    // instead of a generic timestamp. Strip only filesystem-illegal characters.
+    const safeName = (String(title || 'Factura').replace(/[\/\\:*?"<>|]+/g, '').trim() || 'Factura').slice(0, 90);
+    const file = path.join(os.tmpdir(), `${safeName}.pdf`);
     fs.writeFileSync(file, pdf);
 
     // Visible preview window. plugins:true enables the built-in PDF viewer,
