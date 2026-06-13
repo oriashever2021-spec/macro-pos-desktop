@@ -135,7 +135,11 @@ ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
       webPreferences: { plugins: true },
     });
     viewer.setMenuBarVisibility(false);
-    await viewer.loadFile(file);
+    // Open the PDF fit-to-WIDTH (#view=FitH) so the narrow 80mm thermal page
+    // fills the window and is readable, instead of the default fit-whole-page
+    // (which shows the tall receipt tiny). On-screen only — the PDF/page size
+    // is unchanged, so thermal printing is unaffected.
+    await viewer.loadFile(file, { hash: 'view=FitH' });
     viewer.on('closed', () => { try { fs.unlinkSync(file); } catch {} });
     return true;
   } catch (err) {
