@@ -140,11 +140,56 @@ ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
     // (which shows the tall receipt tiny). On-screen only — the PDF/page size
     // is unchanged, so thermal printing is unaffected.
     await viewer.loadFile(file, { hash: 'view=FitH' });
-    viewer.on('closed', () => { try { fs.unlinkSync(file); } catch {} });
+    // Bring the POS window back to the front when the viewer closes, so the
+    // user doesn't get dropped behind other apps / has to click the dock icon.
+    viewer.on('closed', () => {
+      try { fs.unlinkSync(file); } catch {}
+      try { if (win && !win.isDestroyed()) { win.show(); win.focus(); } } catch {}
+    });
     return true;
   } catch (err) {
     console.error('eccos-print-receipt failed:', err);
     try { if (renderWin) renderWin.destroy(); } catch {}
+    return false;
+  }
+});
+
+// Print the CURRENT app page (already styled for print) to a PDF and open it in
+// a viewer window — used for the full reports. We honor the page's own CSS @page
+// rule (preferCSSPageSize) so the output is identical to the browser's print.
+ipcMain.handle('eccos-print-page', async (_evt, opts) => {
+  const title = (opts && opts.title) || 'Reporte';
+  const landscape = !!(opts && opts.landscape);
+  if (!win) return false;
+  try {
+    const pdf = await win.webContents.printToPDF({
+      printBackground: false,      // reports print on white, like the browser default
+      preferCSSPageSize: true,     // honor the injected @page { size: A4 landscape/portrait; margin }
+    });
+    const safeName = (String(title).replace(/[\/\\:*?"<>|]+/g, '').trim() || 'Reporte').slice(0, 90);
+    const file = path.join(os.tmpdir(), `${safeName}.pdf`);
+    fs.writeFileSync(file, pdf);
+
+    const viewer = new BrowserWindow({
+      width: landscape ? 1024 : 760,
+      height: 860,
+      title,
+      parent: win || undefined,
+      autoHideMenuBar: true,
+      backgroundColor: '#525659',
+      webPreferences: { plugins: true },
+    });
+    viewer.setMenuBarVisibility(false);
+    await viewer.loadFile(file);
+    // Bring the POS window back to the front when the viewer closes, so the
+    // user doesn't get dropped behind other apps / has to click the dock icon.
+    viewer.on('closed', () => {
+      try { fs.unlinkSync(file); } catch {}
+      try { if (win && !win.isDestroyed()) { win.show(); win.focus(); } } catch {}
+    });
+    return true;
+  } catch (err) {
+    console.error('eccos-print-page failed:', err);
     return false;
   }
 });
