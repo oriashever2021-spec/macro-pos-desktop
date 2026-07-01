@@ -12,4 +12,9 @@ contextBridge.exposeInMainWorld('eccosPrint', {
   // Returns a promise that resolves true if the PDF preview window opened, or
   // false if it failed (so the web app can fall back to its own print path).
   printReceipt: (html, title) => ipcRenderer.invoke('eccos-print-receipt', { html, title }),
+  // Render the CURRENT page (already styled for print via body.report-print +
+  // @media print + an injected @page rule) to a PDF and open it in a viewer
+  // window — used for the full reports (Cierre, Ventas, …) so the desktop app
+  // gets the same preview the browser's print dialog shows.
+  printPage: (title, landscape) => ipcRenderer.invoke('eccos-print-page', { title, landscape }),
 });

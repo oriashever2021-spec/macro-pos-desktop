@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require('electron');
+const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -43,6 +44,20 @@ function showOfflineScreen() {
     '</div></body></html>';
   win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 }
+
+function isThermalPrinter(p) {
+  return /epson|tm.?t20|thermal|recib|tirilla|facturas/i.test(`${p.name} ${p.displayName || ''}`);
+}
+
+async function thermalPrinterName(webContents, fallbackName = '') {
+  try {
+    const printers = await webContents.getPrintersAsync();
+    const thermal = printers.find(isThermalPrinter);
+    if (thermal) return thermal.name;
+  } catch {}
+  return fallbackName;
+}
+
 
 function createWindow() {
   win = new BrowserWindow({
@@ -101,52 +116,30 @@ ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
 
   let renderWin = null;
   try {
-    // Off-screen window just to lay out the receipt and export a PDF.
+    // Off-screen window to lay out the receipt, then SILENT-print it directly —
+    // one click, no preview/dialog. Auto-targets the thermal printer (Epson TM)
+    // so it doesn't matter what the system default is (reports still use it).
     renderWin = new BrowserWindow({
       show: false,
       webPreferences: { contextIsolation: true, nodeIntegration: false },
     });
     await renderWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    await new Promise((r) => setTimeout(r, 200)); // let layout settle
 
-    const pdf = await renderWin.webContents.printToPDF({
-      printBackground: true,
-      preferCSSPageSize: true, // honor the receipt's @page { size: 80mm auto }
+    // Pick the thermal printer by name (Epson / TM-T20 / thermal). Empty string
+    // falls back to the system default printer.
+    const deviceName = await thermalPrinterName(renderWin.webContents);
+
+    const ok = await new Promise((resolve) => {
+      renderWin.webContents.print(
+        { silent: true, deviceName, printBackground: true, margins: { marginType: 'none' } },
+        (success, failureReason) => { if (!success) console.error('print failed:', failureReason); resolve(success); }
+      );
     });
 
     renderWin.destroy();
     renderWin = null;
-
-    // Name the temp file from the receipt title so the PDF viewer's Download
-    // defaults to a meaningful name (e.g. "Factura 36299 - 13 jun 2026.pdf")
-    // instead of a generic timestamp. Strip only filesystem-illegal characters.
-    const safeName = (String(title || 'Factura').replace(/[\/\\:*?"<>|]+/g, '').trim() || 'Factura').slice(0, 90);
-    const file = path.join(os.tmpdir(), `${safeName}.pdf`);
-    fs.writeFileSync(file, pdf);
-
-    // Visible preview window. plugins:true enables the built-in PDF viewer,
-    // which has its own print + download controls.
-    const viewer = new BrowserWindow({
-      width: 460,
-      height: 760,
-      title,
-      parent: win || undefined,
-      autoHideMenuBar: true,
-      backgroundColor: '#525659',
-      webPreferences: { plugins: true },
-    });
-    viewer.setMenuBarVisibility(false);
-    // Open the PDF fit-to-WIDTH (#view=FitH) so the narrow 80mm thermal page
-    // fills the window and is readable, instead of the default fit-whole-page
-    // (which shows the tall receipt tiny). On-screen only — the PDF/page size
-    // is unchanged, so thermal printing is unaffected.
-    await viewer.loadFile(file, { hash: 'view=FitH' });
-    // Bring the POS window back to the front when the viewer closes, so the
-    // user doesn't get dropped behind other apps / has to click the dock icon.
-    viewer.on('closed', () => {
-      try { fs.unlinkSync(file); } catch {}
-      try { if (win && !win.isDestroyed()) { win.show(); win.focus(); } } catch {}
-    });
-    return true;
+    return ok; // false → web side falls back to its own print path
   } catch (err) {
     console.error('eccos-print-receipt failed:', err);
     try { if (renderWin) renderWin.destroy(); } catch {}
@@ -154,13 +147,45 @@ ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
   }
 });
 
-// Print the CURRENT app page (already styled for print) to a PDF and open it in
-// a viewer window — used for the full reports. We honor the page's own CSS @page
-// rule (preferCSSPageSize) so the output is identical to the browser's print.
+
+// Print the CURRENT app page (already styled for print). Reports go SILENTLY to
+// the "office" printer (the non-thermal one) so they never depend on whatever the
+// OS default happens to be — mirroring how the receipt path names the thermal
+// printer. This is what makes the two buttons truly hands-off: 🧾 → thermal,
+// 🖨️ → office printer, no dialog, no "Last Printer Used" drift. If no office
+// printer exists on this machine (e.g. a dev box with only the Epson), we fall
+// back to rendering a PDF and opening the viewer so the user can still print.
 ipcMain.handle('eccos-print-page', async (_evt, opts) => {
   const title = (opts && opts.title) || 'Reporte';
   const landscape = !!(opts && opts.landscape);
   if (!win) return false;
+
+  // Find the office printer = the OS default if it isn't the thermal one,
+  // otherwise the first non-thermal printer. Auto-adapts per machine, nothing
+  // hardcoded (your HP at home, her office printer at the store).
+  let officeName = '';
+  try {
+    const printers = await win.webContents.getPrintersAsync();
+    const nonThermal = printers.filter((p) => !isThermalPrinter(p));
+    const sysDefault = printers.find((p) => p.isDefault);
+    const office = (sysDefault && !isThermalPrinter(sysDefault)) ? sysDefault : nonThermal[0] || null;
+    if (office) officeName = office.name;
+  } catch {}
+
+  // Preferred path: silent direct print to the office printer — no dialog, no drift.
+  if (officeName) {
+    try {
+      const ok = await new Promise((resolve) => {
+        win.webContents.print(
+          { silent: true, deviceName: officeName, landscape, printBackground: false },
+          (success, failureReason) => { if (!success) console.error('print-page failed:', failureReason); resolve(success); }
+        );
+      });
+      if (ok) return true; // done — printed straight to the office printer
+    } catch (err) { console.error('eccos-print-page silent print error:', err); }
+    // fall through to the PDF viewer if the silent print didn't go
+  }
+
   try {
     const pdf = await win.webContents.printToPDF({
       printBackground: false,      // reports print on white, like the browser default
