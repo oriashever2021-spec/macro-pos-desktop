@@ -17,4 +17,7 @@ contextBridge.exposeInMainWorld('eccosPrint', {
   // window — used for the full reports (Cierre, Ventas, …) so the desktop app
   // gets the same preview the browser's print dialog shows.
   printPage: (title, landscape) => ipcRenderer.invoke('eccos-print-page', { title, landscape }),
+  // Fire the cash-drawer pulse to the thermal printer. The web app calls this ONLY
+  // on efectivo sales. Resolves true if the pulse was sent, false otherwise.
+  openDrawer: () => ipcRenderer.invoke('eccos-open-drawer'),
 });

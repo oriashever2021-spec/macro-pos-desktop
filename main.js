@@ -1,5 +1,5 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require('electron');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -215,6 +215,98 @@ ipcMain.handle('eccos-print-page', async (_evt, opts) => {
     return true;
   } catch (err) {
     console.error('eccos-print-page failed:', err);
+    return false;
+  }
+});
+
+// ── Cash-drawer kick ─────────────────────────────────────────────────────────
+// A drawer opens on the ESC/POS pulse 1B 70 00 19 FA sent to the thermal printer.
+// HTML printing (webContents.print) can't carry raw control codes, so this goes
+// straight to the spooler as RAW bytes (Windows winspool / macOS `lp -o raw`).
+// The web app invokes this ONLY on efectivo sales; card/SINPE/crédito never call it.
+const DRAWER_PULSE = Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa]);
+
+function rawPrintWindows(deviceName, buffer, jobName) {
+  const b64 = buffer.toString('base64');
+  const script = `
+$printerName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(deviceName, 'utf8').toString('base64')}'))
+$jobName = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(jobName, 'utf8').toString('base64')}'))
+$bytes = [Convert]::FromBase64String('${b64}')
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class RawPrinter {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Ansi)]
+  public class DOCINFOA {
+    [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+    [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+    [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+  }
+  [DllImport("winspool.Drv", EntryPoint="OpenPrinterA", SetLastError=true, CharSet=CharSet.Ansi, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool OpenPrinter(string szPrinter, out IntPtr hPrinter, IntPtr pd);
+  [DllImport("winspool.Drv", EntryPoint="ClosePrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool ClosePrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="StartDocPrinterA", SetLastError=true, CharSet=CharSet.Ansi, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+  [DllImport("winspool.Drv", EntryPoint="EndDocPrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool EndDocPrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="StartPagePrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool StartPagePrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="EndPagePrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool EndPagePrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="WritePrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+  public static extern bool WritePrinter(IntPtr hPrinter, byte[] pBytes, Int32 dwCount, out Int32 dwWritten);
+}
+"@
+$handle = [IntPtr]::Zero
+if (-not [RawPrinter]::OpenPrinter($printerName, [ref]$handle, [IntPtr]::Zero)) { throw "OpenPrinter failed: $printerName" }
+try {
+  $doc = New-Object RawPrinter+DOCINFOA
+  $doc.pDocName = $jobName
+  $doc.pDataType = "RAW"
+  if (-not [RawPrinter]::StartDocPrinter($handle, 1, $doc)) { throw "StartDocPrinter failed" }
+  if (-not [RawPrinter]::StartPagePrinter($handle)) { throw "StartPagePrinter failed" }
+  [int]$written = 0
+  if (-not [RawPrinter]::WritePrinter($handle, $bytes, $bytes.Length, [ref]$written)) { throw "WritePrinter failed" }
+  [RawPrinter]::EndPagePrinter($handle) | Out-Null
+  [RawPrinter]::EndDocPrinter($handle) | Out-Null
+} finally {
+  if ($handle -ne [IntPtr]::Zero) { [RawPrinter]::ClosePrinter($handle) | Out-Null }
+}
+`;
+  return new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (c) => { stderr += c.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(stderr.trim() || `PowerShell exited ${code}`))));
+  });
+}
+
+function rawPrintMac(deviceName, buffer, jobName) {
+  const file = path.join(os.tmpdir(), `${(jobName || 'job').replace(/[^\w.-]+/g, '_')}.bin`);
+  fs.writeFileSync(file, buffer);
+  return new Promise((resolve, reject) => {
+    const args = ['-o', 'raw', '-t', jobName, ...(deviceName ? ['-d', deviceName] : []), file];
+    const child = spawn('lp', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (c) => { stderr += c.toString(); });
+    child.on('error', reject);
+    child.on('close', (code) => { try { fs.unlinkSync(file); } catch {} (code === 0 ? resolve() : reject(new Error(stderr.trim() || `lp exited ${code}`))); });
+  });
+}
+
+ipcMain.handle('eccos-open-drawer', async () => {
+  try {
+    const wc = (win && win.webContents) || null;
+    const deviceName = wc ? await thermalPrinterName(wc) : '';
+    if (!deviceName) { console.error('open-drawer: no thermal printer found'); return false; }
+    if (process.platform === 'win32') await rawPrintWindows(deviceName, DRAWER_PULSE, 'Eccos abrir gaveta');
+    else if (process.platform === 'darwin') await rawPrintMac(deviceName, DRAWER_PULSE, 'Eccos abrir gaveta');
+    else return false;
+    return true;
+  } catch (err) {
+    console.error('eccos-open-drawer failed:', err);
     return false;
   }
 });
