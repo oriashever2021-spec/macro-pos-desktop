@@ -81,6 +81,14 @@ function createWindow() {
   win.show();
   win.loadURL(APP_URL);
 
+  // The web page sets its own <title>, which overrides ours. Re-append the desktop
+  // wrapper version on every title change so the title bar / taskbar always shows
+  // which build you're on (and whether auto-update actually took).
+  win.on('page-title-updated', (e, title) => {
+    e.preventDefault();
+    win.setTitle(`${title} · Escritorio v${app.getVersion()}`);
+  });
+
   // Open external links / non-app navigation in the system browser, never in-window.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (!isAllowed(url)) shell.openExternal(url);
