@@ -134,14 +134,22 @@ ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
 
     // Force an 80mm-wide page sized to the receipt's real height. Without an explicit
     // pageSize, silent print falls back to the printer's default (Letter) and the 80mm
-    // receipt came out shrunk into a corner. 96dpi → microns: px / 96 * 25400.
-    let heightMicrons = 200000; // fallback ~200mm if measuring fails
+    // receipt came out shrunk into a corner. We also CLAMP the render window to the
+    // measured content height so the print starts at the very top and cuts right at the
+    // end — no big top gap, no blank feed. 96dpi → microns: px / 96 * 25400.
+    let heightPx = 0;
     try {
-      const px = await renderWin.webContents.executeJavaScript(
+      heightPx = await renderWin.webContents.executeJavaScript(
         'Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight))'
       );
-      if (px > 0) heightMicrons = Math.min(1200000, Math.max(40000, Math.ceil((px / 96) * 25400) + 4000));
     } catch {}
+    if (heightPx > 0) {
+      try { renderWin.setContentSize(360, heightPx); } catch {}
+      await new Promise((r) => setTimeout(r, 60)); // let the resize settle
+    }
+    const heightMicrons = heightPx > 0
+      ? Math.min(1200000, Math.max(40000, Math.ceil((heightPx / 96) * 25400) + 2000))
+      : 200000; // fallback ~200mm if measuring fails
 
     const ok = await new Promise((resolve) => {
       renderWin.webContents.print(
