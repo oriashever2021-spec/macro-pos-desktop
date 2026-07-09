@@ -139,8 +139,11 @@ ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
     // end — no big top gap, no blank feed. 96dpi → microns: px / 96 * 25400.
     let heightPx = 0;
     try {
+      // Measure the RECEIPT's own height, NOT the window. document.documentElement.scrollHeight
+      // returns the viewport height (1200) when content is shorter, which sized the page to
+      // ~317mm and left a huge top gap. getBoundingClientRect on the body = true content height.
       heightPx = await renderWin.webContents.executeJavaScript(
-        'Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight))'
+        'Math.ceil(document.body.getBoundingClientRect().height)'
       );
     } catch {}
     if (heightPx > 0) {
