@@ -373,37 +373,20 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// Auto-update (Windows installed builds only). Checks the GitHub Release for a
-// newer version, asks the user before downloading and again before installing.
+// Auto-update (Windows installed builds only). FULLY SILENT — like Chrome: it
+// downloads new versions in the background and installs them the next time the
+// app is closed. No dialogs, no buttons, nothing for the store to click. This
+// matters because the shop PC can't be reached in person; fixes must self-heal.
+// The installed version is always visible in the title bar (see page-title-updated).
 // Skipped in dev and on macOS (the Mac build is unpackaged + unsigned).
 function setupAutoUpdate() {
   if (!app.isPackaged || process.platform !== 'win32') return;
   let autoUpdater;
   try { ({ autoUpdater } = require('electron-updater')); } catch { return; }
-  autoUpdater.autoDownload = false;            // ask before downloading
-  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.autoDownload = true;            // pull new versions in the background
+  autoUpdater.autoInstallOnAppQuit = true;    // apply silently on the next close — no prompt
 
-  autoUpdater.on('update-available', (info) => {
-    dialog.showMessageBox(win, {
-      type: 'info', noLink: true, buttons: ['Descargar ahora', 'Más tarde'], defaultId: 0, cancelId: 1,
-      title: 'Actualización disponible',
-      message: `Hay una nueva versión disponible (${info.version}).`,
-      detail: 'Puede descargarla ahora. Se instalará cuando reinicie la aplicación.',
-    }).then((r) => { if (r.response === 0) autoUpdater.downloadUpdate().catch(() => {}); });
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    dialog.showMessageBox(win, {
-      type: 'info', noLink: true, buttons: ['Reiniciar e instalar', 'Al cerrar'], defaultId: 0, cancelId: 1,
-      title: 'Actualización lista',
-      message: `La versión ${info.version} está lista.`,
-      detail: 'La aplicación se reiniciará para terminar de instalarla.',
-    }).then((r) => {
-      if (r.response === 0) { quitting = true; autoUpdater.quitAndInstall(); }
-      else { autoUpdater.autoInstallOnAppQuit = true; } // otherwise install on next close
-    });
-  });
-
+  autoUpdater.on('update-downloaded', (info) => { console.log('update ready, installs on next quit:', info.version); });
   autoUpdater.on('error', (err) => { console.error('auto-update error:', err); });
 
   autoUpdater.checkForUpdates().catch(() => {});
