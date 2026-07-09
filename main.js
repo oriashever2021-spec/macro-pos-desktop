@@ -121,6 +121,8 @@ ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
     // so it doesn't matter what the system default is (reports still use it).
     renderWin = new BrowserWindow({
       show: false,
+      width: 360, // ~80mm at 96dpi so the receipt lays out at its true width
+      height: 1200,
       webPreferences: { contextIsolation: true, nodeIntegration: false },
     });
     await renderWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
@@ -130,9 +132,27 @@ ipcMain.handle('eccos-print-receipt', async (_evt, payload) => {
     // falls back to the system default printer.
     const deviceName = await thermalPrinterName(renderWin.webContents);
 
+    // Force an 80mm-wide page sized to the receipt's real height. Without an explicit
+    // pageSize, silent print falls back to the printer's default (Letter) and the 80mm
+    // receipt came out shrunk into a corner. 96dpi → microns: px / 96 * 25400.
+    let heightMicrons = 200000; // fallback ~200mm if measuring fails
+    try {
+      const px = await renderWin.webContents.executeJavaScript(
+        'Math.ceil(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight))'
+      );
+      if (px > 0) heightMicrons = Math.min(1200000, Math.max(40000, Math.ceil((px / 96) * 25400) + 4000));
+    } catch {}
+
     const ok = await new Promise((resolve) => {
       renderWin.webContents.print(
-        { silent: true, deviceName, printBackground: true, margins: { marginType: 'none' } },
+        {
+          silent: true,
+          deviceName,
+          printBackground: true,
+          margins: { marginType: 'none' },
+          scaleFactor: 100,                                   // no shrink-to-fit
+          pageSize: { width: 80000, height: heightMicrons },  // 80mm × content height (microns)
+        },
         (success, failureReason) => { if (!success) console.error('print failed:', failureReason); resolve(success); }
       );
     });
