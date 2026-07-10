@@ -49,6 +49,13 @@ function isThermalPrinter(p) {
   return /epson|tm.?t20|thermal|recib|tirilla|facturas/i.test(`${p.name} ${p.displayName || ''}`);
 }
 
+// Virtual "printers" that don't put ink on paper: silent-printing to them pops a
+// Windows "Save Print Output As" dialog (that's the cierre-A4 bug on a PC with no
+// real sheet printer). Never treat these as the office printer.
+function isVirtualPrinter(p) {
+  return /print to pdf|guardar como pdf|microsoft xps|xps document|onenote|\bfax\b|pdf24|cutepdf|foxit|dopdf/i.test(`${p.name} ${p.displayName || ''}`);
+}
+
 async function thermalPrinterName(webContents, fallbackName = '') {
   try {
     const printers = await webContents.getPrintersAsync();
@@ -202,9 +209,14 @@ ipcMain.handle('eccos-print-page', async (_evt, opts) => {
   let officeName = '';
   try {
     const printers = await win.webContents.getPrintersAsync();
-    const nonThermal = printers.filter((p) => !isThermalPrinter(p));
+    // A REAL office printer = not the thermal, and not a virtual PDF/XPS/Fax one.
+    // If the store only has the thermal + "Print to PDF", there is no office printer,
+    // so we skip the doomed silent print (which pops the Save-as-PDF dialog) and go
+    // straight to the on-screen preview instead.
+    const isReal = (p) => !isThermalPrinter(p) && !isVirtualPrinter(p);
+    const realPrinters = printers.filter(isReal);
     const sysDefault = printers.find((p) => p.isDefault);
-    const office = (sysDefault && !isThermalPrinter(sysDefault)) ? sysDefault : nonThermal[0] || null;
+    const office = (sysDefault && isReal(sysDefault)) ? sysDefault : realPrinters[0] || null;
     if (office) officeName = office.name;
   } catch {}
 
