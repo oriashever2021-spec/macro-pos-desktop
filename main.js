@@ -45,8 +45,22 @@ function showOfflineScreen() {
   win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 }
 
+// An Epson INKJET / office multifunction — NOT a receipt printer. Epson makes both
+// the TM-* thermal receipt printers and full-size inkjets (L###, XP-, WF-, ET-,
+// Stylus, WorkForce, EcoTank). The store's office printer is an "EPSON L220 Series";
+// matching a bare "epson" made it look thermal, so receipts + the cash-drawer pulse
+// sometimes landed on it and the drawer never kicked (live incident 2026-07-15).
+function isEpsonOfficeSeries(text) {
+  return /\bl\d{3}\b|\bxp-?\d|\bwf-?\d|\bet-?\d{3}|stylus|workforce|ecotank/i.test(text);
+}
+
+// A THERMAL 80mm receipt printer — receipts and the drawer pulse go ONLY here.
+// Match on real thermal signals, never a bare brand name. The store's thermal is
+// "ECCOS FACTURAS" (matches factura/eccos); Epson thermals are TM-T##/TM-m##.
 function isThermalPrinter(p) {
-  return /epson|tm.?t20|thermal|recib|tirilla|facturas/i.test(`${p.name} ${p.displayName || ''}`);
+  const text = `${p.name} ${p.displayName || ''}`;
+  if (isEpsonOfficeSeries(text)) return false; // an Epson inkjet is never the thermal
+  return /tm.?[tm]\d|thermal|t[ée]rmica|recib|tirilla|factura|eccos|58 ?mm|80 ?mm/i.test(text);
 }
 
 // Virtual "printers" that don't put ink on paper: silent-printing to them pops a
