@@ -30,18 +30,39 @@ function isAllowed(url) {
   try { return ALLOWED_HOSTS.includes(new URL(url).hostname); } catch { return false; }
 }
 
-function showOfflineScreen() {
+// Chromium net error for a certificate that is "not valid yet / expired" for THIS computer's date.
+// With a wrong PC clock (dead CMOS battery after a power-off) HTTPS fails while the internet works,
+// so the generic "no internet" message misleads the cashier (incident 2026-10-28: clock 1 day
+// behind, the web.app certificate renewed the day before).
+const ERR_CERT_DATE_INVALID = -201;
+
+function showOfflineScreen(kind = 'offline') {
+  const clock = kind === 'clock';
+  const title = clock ? 'La fecha u hora de esta computadora está mal' : 'Sin conexión a internet';
+  const body = clock
+    ? 'Con la fecha incorrecta no se puede abrir el sistema de forma segura. ' +
+      'Fecha en esta computadora: <b id="pcdate"></b><br><br>' +
+      'Corríjala: <b>Configuración → Hora e idioma → Fecha y hora → Sincronizar ahora</b>. ' +
+      'El sistema reintenta solo.'
+    : 'No se pudo conectar con el sistema. Revise el wifi o el cable de red. El sistema reintenta solo.';
   const html =
     '<!doctype html><html lang="es"><head><meta charset="utf-8">' +
     '<style>html,body{height:100%;margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;' +
     'background:#a32a22;color:#fff;display:flex;align-items:center;justify-content:center}' +
-    '.box{text-align:center;max-width:480px;padding:32px}h1{font-size:24px;margin:0 0 10px}' +
+    '.box{text-align:center;max-width:520px;padding:32px}h1{font-size:24px;margin:0 0 10px}' +
     'p{opacity:.9;line-height:1.5}button{margin-top:22px;font-size:18px;font-weight:700;' +
     'padding:14px 28px;border:0;border-radius:12px;background:#fff;color:#a32a22;cursor:pointer}' +
-    '</style></head><body><div class="box"><h1>Sin conexión a internet</h1>' +
-    '<p>No se pudo conectar con el sistema. Revise el wifi o el cable de red y vuelva a intentar.</p>' +
+    '.small{font-size:13px;opacity:.75;margin-top:10px}' +
+    '</style></head><body><div class="box"><h1>' + title + '</h1>' +
+    '<p>' + body + '</p>' +
     '<button onclick="location.href=\'' + APP_URL + '\'">Reintentar</button>' +
-    '</div></body></html>';
+    '<div class="small" id="next"></div>' +
+    '</div><script>' +
+    'var d=document.getElementById("pcdate");if(d)d.textContent=new Date().toLocaleString("es-CR");' +
+    // Retry on its own every 30 s, so nobody has to press anything once the time or network is fixed.
+    'var n=30,t=document.getElementById("next");setInterval(function(){n--;' +
+    'if(n<=0){location.href="' + APP_URL + '";}else{t.textContent="Reintentando en "+n+" s";}},1000);' +
+    '</script></body></html>';
   win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 }
 
@@ -122,7 +143,9 @@ function createWindow() {
   // Friendly offline screen instead of Chromium's error page.
   win.webContents.on('did-fail-load', (e, errorCode, _desc, validatedURL, isMainFrame) => {
     // -3 = aborted (e.g. redirect); ignore, and ignore data: URLs (the offline screen itself).
-    if (isMainFrame && errorCode !== -3 && !String(validatedURL).startsWith('data:')) showOfflineScreen();
+    if (isMainFrame && errorCode !== -3 && !String(validatedURL).startsWith('data:')) {
+      showOfflineScreen(errorCode === ERR_CERT_DATE_INVALID ? 'clock' : 'offline');
+    }
   });
 
   // Confirm before the window closes (X button, Alt+F4, Ctrl+W).
